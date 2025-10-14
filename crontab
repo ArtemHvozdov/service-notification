@@ -1,0 +1,1 @@
+*/5 * * * * cd /app && echo "[CRON] Starting notifaer at $(date)" >> /var/log/cron/notifaer.log 2>&1 && ./notifaer >> /var/log/cron/notifaer.log 2>&1 && echo "[CRON] Finished notifaer at $(date)" >> /var/log/cron/notifaer.log 2>&1
