@@ -8,10 +8,31 @@ import (
 	"time"
 
 	"github.com/ArtemHvozdov/service-notification/internal/database"
+	"github.com/ArtemHvozdov/service-notification/internal/models"
+	"github.com/ArtemHvozdov/service-notification/internal/utils"
 	"github.com/joho/godotenv"
 	_ "github.com/mattn/go-sqlite3"
-	//"gopkg.in/telebot.v3"
+	"gopkg.in/telebot.v3"
 )
+
+var hurryUppMsg = []string {
+  "@%s агов, красуне! Просто нагадую, що твоя відповідь у грі - це як сонце для квіточки дружби 🌸 Ти ще встигаєш відповісти на своє завдання! 😘",
+  "@%s хей, зіронько! У тебе залишилось 12 годин, щоб відповісти! Я знаю, тобі є що сказати! 💛",
+  "@%s на Землі зафіксовано критичний рівень нестачі твоїх відповідей у грі! 📢 Зайди в гру та врятуй ситуацію!",
+  "@%s ти ж не хочеш, щоб я текстила тобі «Ну що, ти вже відповіла?» 😏 Ось і я так думаю… Я ж знаю, яка ти заклопотана, крихітко! Але навіть коротка відповідь - це велика приємність для твоїх подружок 💛",
+  "@%s ого, ти щось задумала… 🤔 Уже 12 годин без відповіді у грі. Певне, ця відповідь буде просто неймовірною, як і ти сама! Гарного дня і стеж за часом! 🌟",
+  "@%s гей, кицю, я знаю, що ти зайнята, але просто хочу нагадати про нашу гру 💛 Твоя відповідь важлива для твоєї бесті! 🐈",
+  "@%s 🔮 я запитала у чарівної кулі, чи ти скоро відповіси у грі. Вона видала: \"Сумнівно\" 🤨 Давай змінимо її пророцтво, га? 😆",
+}
+
+
+func SendTelegramMsgToChat(bot *telebot.Bot, chatID int64, userName string) error {
+	chat := &telebot.Chat{ID: chatID}
+	txt := utils.GetRandomMsg(hurryUppMsg)
+	message := fmt.Sprintf(txt, userName)
+	_, err := bot.Send(chat, message)
+	return err
+}
 
 func main() {
 	log.Println("=== Notifier started ===")
@@ -40,14 +61,14 @@ func main() {
 	}
 
 	// Initialization Telegram bot
-	// pref := telebot.Settings{
-	// 	Token:  telegramToken,
-	// }
+	pref := telebot.Settings{
+		Token:  telegramToken,
+	}
 
-	// bot, err := telebot.NewBot(pref)
-	// if err != nil {
-	// 	log.Fatalf("Failed to create Telegram bot: %v", err)
-	// }
+	bot, err := telebot.NewBot(pref)
+	if err != nil {
+		log.Fatalf("Failed to create Telegram bot: %v", err)
+	}
 
 	// dbPath := dbDir + dbFile
 	// log.Printf("Database path: %s", dbPath)
@@ -58,13 +79,8 @@ func main() {
 	// }
 
 	dataDir := "/app/data"
-dataFile := "tg-game-bot.db"
-dbPath := fmt.Sprintf("%s/%s", dataDir, dataFile)
-
-	// if err := os.MkdirAll("dataDir", 0755); err != nil {
-	// 	log.Println("Error creating folder:")
-	// 	//log.Fatalf("Error creating folder %s: %v", dataDir, err)
-	// }
+	dataFile := "tg-game-bot.db"
+	dbPath := fmt.Sprintf("%s/%s", dataDir, dataFile)
 
 	db, err := database.NewDatabase(dbPath)
 	if err != nil {
@@ -77,41 +93,66 @@ dbPath := fmt.Sprintf("%s/%s", dataDir, dataFile)
 		log.Fatalf("Failed to get active games: %v", err)
 	}
 
+	timeNow := time.Now().Unix()
+
 	if len(activeGames) == 0 {
 		log.Println("No active games found.")
 	} else {
 		log.Printf("Found %d active games:", len(activeGames))
 	}
 
+	remindersMap := make(map[int64][]*models.RemindedPlayer)
+
 	for _, game := range activeGames {
-		log.Printf("Active Game: ID=%d, Name=%s, CurrentTaskID=%d, TotalPlayers=%d, Status=%s",
-			game.ID, game.Name, game.CurrentTaskID, game.TotalPlayers, game.Status)
+		log.Printf("Active Game: ID=%d, Name=%s, IdChat=%d ,CurrentTaskID=%d",
+			game.ID, game.Name, game.GameChatID, game.CurrentTaskID)
+
+		log.Printf("Time now: %d, TimeUpdateTask: %d", timeNow, game.TimeUpdateTask)
+		log.Printf("Delta time: %d", timeNow - game.TimeUpdateTask)
+
+		// timeNow - game.TimeUpdateTask >= 600 && timeNow - game.TimeUpdateTask < 900
+		if timeNow - game.TimeUpdateTask >= 600 && timeNow - game.TimeUpdateTask < 1200 {
+			log.Print("Start checking players...")
+            //continue
+			players, err := database.GetAllPlayersByGameID(game.ID)
+			if err != nil {
+				log.Printf("Failed to get players for game ID %d: %v", game.ID, err)
+			}
+
+			for _, p := range players {
+				hasResp, err := database.HasPlayerResponded(int(p.ID), game.ID, game.CurrentTaskID)
+				if err != nil {
+					log.Printf("Error checking response for player ID %d: %v", p.ID, err)
+				}
+				
+				hasNotification, err := database.HasNotificationBeenSent(game.ID, int(game.GameChatID), game.CurrentTaskID, int(p.ID))
+				if err != nil {
+					log.Printf("Error checking notification for player ID %d: %v", p.ID, err)
+				}
+				
+				if !hasResp && !hasNotification {
+					log.Printf("Game chat id: %d", game.GameChatID)
+					remindersMap[game.GameChatID] = append(remindersMap[game.GameChatID], &models.RemindedPlayer{
+						ID:       int(p.ID),
+						Username: p.UserName,
+						GameID:   game.ID,
+						TaskID:   game.CurrentTaskID,
+					})
+				}
+			}
+		}
+
+    }
+	
+	// through the entire remindersMap
+	for gameChatID, players := range remindersMap {
+		log.Printf("Game Chat ID: %d, Players needing reminder: %d", gameChatID, len(players))
+		
+		for _, player := range players {
+			log.Printf(" Chat: %d - Player ID: %d, Username: @%s", gameChatID, player.ID, player.Username)
+			SendTelegramMsgToChat(bot, gameChatID, player.Username)
+			database.MarkNotificationUser(player.GameID, int(gameChatID), player.TaskID, player.ID)
+		}
 	}
 
-	// Open database connection	
-	// db, err := sql.Open("sqlite3", dbPath+
-	// 	"?_journal_mode=WAL"+
-	// 	"&_foreign_keys=on"+
-	// 	"&_busy_timeout=5000") 
-	// if err != nil {
-	// 	log.Fatalf("Failed to open database: %v", err)
-	// }
-
-	// Setting pool of connection
-	// db.SetMaxOpenConns(5) 
-	// db.SetMaxIdleConns(5)
-	// db.SetConnMaxLifetime(time.Minute * 5)
-
-	// defer db.Close()
-
-	// Test database connection
-	// if err := db.Ping(); err != nil {
-	// 	log.Fatalf("Failed to ping database: %v", err)
-	// }
 }
-
-
-
-// 1. Получить все активные игры из БД (таблица games, есть айди чата в игре) +
-// 2. Если прошло больше N минут с обрновления таски в игре, проверить кто еще не ответил
-//    2.1 
