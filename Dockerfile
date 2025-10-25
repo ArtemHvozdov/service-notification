@@ -1,27 +1,27 @@
-# Этап сборки
+# assembly stage
 FROM golang:1.23-alpine AS builder
 
-# Устанавливаем необходимые пакеты для сборки
+# Install the necessary packages for assembly
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 
 WORKDIR /build
 
-# Копируем go.mod и go.sum для кеширования зависимостей
+# Copy go.mod and go.sum to cache dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Копируем исходники
+# Copy the source files
 COPY . .
 
-# Собираем бинарник
+# Compiling the binary file
 RUN CGO_ENABLED=1 GOOS=linux go build -o notifaer ./cmd/notifaer/main.go
 
 # ======================================================
-# Финальный образ
+# Final image
 # ======================================================
 FROM alpine:latest
 
-# Устанавливаем необходимые пакеты
+# Install the necessary packages
 RUN apk --no-cache add \
     ca-certificates \
     sqlite \
@@ -29,35 +29,35 @@ RUN apk --no-cache add \
     tzdata \
     && rm -rf /var/cache/apk/*
 
-# Устанавливаем временную зону
+# Install timezone
 ENV TZ=Europe/Kyiv
 
-# Создаём рабочего пользователя
+# Create a working user
 RUN addgroup -g 1001 appgroup && \
     adduser -D -s /bin/sh -u 1001 -G appgroup appuser
 
-# Создаём рабочие папки
+# Create working directories
 WORKDIR /app
 RUN mkdir -p /app/data /var/log/cron && \
     chown -R appuser:appgroup /app /var/log/cron
 
-# Копируем бинарь и env
+# Copy binary file and env file
 COPY --from=builder /build/notifaer /app/
 COPY --from=builder /build/.env /app/
 
-# (Опционально) копируем crontab, если используется
+# (optional) copy crontab
 COPY --from=builder /build/crontab /tmp/crontab
 RUN crontab -u appuser /tmp/crontab && rm /tmp/crontab
 
-# Скрипт запуска
+# Script to start
 RUN echo '#!/bin/sh' > /app/start.sh && \
     echo 'echo "Starting notifaer cron service..."' >> /app/start.sh && \
     echo 'crond -f -d 8' >> /app/start.sh && \
     chmod +x /app/start.sh /app/notifaer && \
     chown appuser:appgroup /app/start.sh
 
-# Открываем volume для данных
+# Open volume for data
 VOLUME ["/app/data"]
 
-# Запуск
+# Start command
 CMD ["/app/start.sh"]
